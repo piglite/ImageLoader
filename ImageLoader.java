@@ -131,23 +131,32 @@ public class ImageLoader {
 		
 		return loader;
 	}
-
+	/**
+	 * 
+	 * 加载图像到ImageView中显示
+	 * @param imageView 用来显示图像的ImageView
+	 * @param s 图像文件的路径
+	 */
 	public static void loadImage(final ImageView imageView, final String s){
+		//根据路径生成唯一标识符
 		final String uri = getMD5(s);
+		
 		imageView.setTag(uri);
+		//试图从LruCache中取出该key对应的图像
 		Bitmap bm = MemoryCache.get(uri);
 		if(bm!=null){
 			Log.d("TAG", "图片从内存缓存加载了");
 			imageView.setImageBitmap(bm);
 			return;
 		}
+		//试图从DiskLruCache中取出该key对应的图像
 		try {
 			Snapshot snap = DiskCache.get(uri);
 			if(snap!=null){
 				Log.d("TAG", "图片从SD卡加载");
 				InputStream is = snap.getInputStream(0);
 				Bitmap bitmap = BitmapFactory.decodeStream(is);
-				Log.d("TAG", uri+"/"+snap);
+				//将DiskLruCache取出的该图像放到LruCache中，这样下次再取就可以从LruCache中取得了
 				if(MemoryCache.get(uri)==null)
 					MemoryCache.put(uri, bitmap);
 				imageView.setImageBitmap(bitmap);
@@ -156,27 +165,34 @@ public class ImageLoader {
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
-
+		//如果LruCache和DiskLruCache中都未缓存过，则需要从网络中下载指定位置的文件
 		tasks.add(new Runnable() {
 
 			@Override
 			public void run() {
+				
 				HttpURLConnection connection = null;
 				BufferedInputStream in = null;
 				BufferedOutputStream out = null;
+				
 				try {
 					connection = (HttpURLConnection) new URL(s).openConnection();
 					connection.connect();
 					InputStream is = connection.getInputStream();
 					in = new BufferedInputStream(is);
+					//将网络中获得的图像进行压缩
 					Bitmap result = compress(imageView, in);
+					//将图像放入LruCache中，下次再读取同一张图片可以从内存缓存中读取
 					MemoryCache.put(uri, result);
+					//将图像放入DiskLruCache中，下次再读取同一张图片可以从内部缓存中读取
 					Editor editor = DiskCache.edit(uri);
 					result.compress(CompressFormat.JPEG, 100, editor.newOutputStream(0));
 					editor.commit();
 					DiskCache.flush();
+					//将图像内容封装后由uiHandler提交到UI线程中
 					TaskBean bean = new TaskBean(imageView, uri, result);
 					Message.obtain(uiHandler, 102, bean).sendToTarget();
+					//完成一个任务后，释放信号量，可以处理下一个任务
 					taskLock.release();
 				} catch (MalformedURLException e) {
 					e.printStackTrace();
@@ -204,7 +220,13 @@ public class ImageLoader {
 
 
 			}
-
+			/**
+			 * 从输入流中根据显示图像的ImageView的尺寸对Bitmap图像进行适当压缩
+			 * 
+			 * @param imageView 显示Bitmap的ImageView
+			 * @param in Bitmap的数据流
+			 * @return 压缩后的图像
+			 */
 			private Bitmap compress(final ImageView imageView, InputStream in) {
 				Bitmap result = null;
 				try {
@@ -213,7 +235,6 @@ public class ImageLoader {
 					while((b=in.read())!=-1){
 						out.write(b);
 					}
-
 					in.close();
 					out.close();
 					byte[] bytes = out.toByteArray();
@@ -243,7 +264,7 @@ public class ImageLoader {
 				return result;
 			}
 		});
-
+		//当下载任务添加到任务队列后要通知pollHandler利用线程池来处理任务，前提是pollHandler已经存在了
 		if(pollHandler==null){
 			try {
 				createLock.acquire();
@@ -296,7 +317,14 @@ public class ImageLoader {
 		}
 		return sb.toString();
 	}
-
+	/**
+	 * 用来封装ImageView，图像地址以及图像
+	 * 这个类的作用主要是用来解决AdapterView在ItemView重用时，出现图片加载混乱的问题
+	 * 当uiHanlder用来显示图像的时候，必须是此时ImageView的tag和图像的uri是一致的
+	 * 才会加载图像
+	 * @author acer_pc
+	 *
+	 */
 	private static class TaskBean{
 		ImageView imageview;
 		String uri;
